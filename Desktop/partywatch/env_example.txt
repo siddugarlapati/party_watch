@@ -1,0 +1,19 @@
+# Firebase Configuration
+# Copy this file to .env and fill in your Firebase credentials
+
+# Path to your Firebase service account key JSON file
+FIREBASE_SERVICE_ACCOUNT_PATH=path/to/your/serviceAccountKey.json
+
+# Your Firebase Realtime Database URL
+FIREBASE_DATABASE_URL=https://your-project-id.firebaseio.com/
+
+# Alternative: Firebase config as JSON string (if you prefer environment variables)
+# FIREBASE_CONFIG={"type":"service_account","project_id":"your-project","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"...","client_id":"...","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"..."}
+
+# WebSocket Server Configuration
+WEBSOCKET_HOST=localhost
+WEBSOCKET_PORT=8765
+
+# Streamlit Configuration
+STREAMLIT_SERVER_PORT=8501
+STREAMLIT_SERVER_ADDRESS=localhost 
