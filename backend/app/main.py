@@ -24,12 +24,20 @@ private_chats: Dict[str, List] = {}  # Format: "user1_user2" -> messages
 sprint_boards: Dict[str, Dict] = {}  # Format: room_code -> board data
 meeting_notes: Dict[str, str] = {}   # Format: room_code -> notes
 
+# Root endpoint for health check
+@app.get("/")
+async def root():
+    return {"message": "PartyWatch API is running!"}
+
+@app.get("/api")
+async def api_root():
+    return {"message": "PartyWatch API is running!", "version": "1.0.0"}
+
 class RoomCreate(BaseModel):
     room_code: str
     host_id: str
     video_id: Optional[str] = None
-    spotify_type: Optional[str] = None
-    spotify_id: Optional[str] = None
+    spotify_url: Optional[str] = None
     room_name: str
     room_type: str
 
@@ -61,6 +69,10 @@ class MeetingNotes(BaseModel):
     notes: str
     user_id: str
 
+class RoomUpdate(BaseModel):
+    video_id: Optional[str] = None
+    spotify_url: Optional[str] = None
+
 @app.post("/api/rooms")
 async def create_room(room_data: RoomCreate):
     """Create a new room"""
@@ -68,8 +80,7 @@ async def create_room(room_data: RoomCreate):
         "room_code": room_data.room_code,
         "host_id": room_data.host_id,
         "video_id": room_data.video_id,
-        "spotify_type": room_data.spotify_type,
-        "spotify_id": room_data.spotify_id,
+        "spotify_url": room_data.spotify_url,
         "room_name": room_data.room_name,
         "room_type": room_data.room_type,
         "users": [room_data.host_id],
@@ -112,12 +123,27 @@ async def join_room(room_code: str, join_data: JoinRoom):
     
     return {
         "success": True,
-        "spotify_type": room.get("spotify_type"),
-        "spotify_id": room.get("spotify_id"),
+        "room_type": room.get("room_type"),
+        "video_id": room.get("video_id"),
+        "spotify_url": room.get("spotify_url"),
         "room_desc": f"{room['room_type']} Room",
         "is_public": room.get("is_public", True),
         "password": room.get("password")
     }
+
+@app.post("/api/rooms/{room_code}/update")
+async def update_room(room_code: str, update_data: RoomUpdate):
+    """Update room information"""
+    if room_code not in rooms_db:
+        raise HTTPException(status_code=404, detail="Room not found")
+    
+    room = rooms_db[room_code]
+    if update_data.video_id is not None:
+        room["video_id"] = update_data.video_id
+    if update_data.spotify_url is not None:
+        room["spotify_url"] = update_data.spotify_url
+    
+    return {"success": True, "room": room}
 
 @app.post("/api/chat/messages")
 async def add_chat_message(message_data: ChatMessage):
@@ -132,6 +158,9 @@ async def add_chat_message(message_data: ChatMessage):
         "message": message_data.message,
         "timestamp": datetime.now().isoformat()
     }
+    
+    if message_data.room_code not in chat_messages:
+        chat_messages[message_data.room_code] = []
     
     chat_messages[message_data.room_code].append(message)
     return message

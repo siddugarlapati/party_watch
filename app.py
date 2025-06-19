@@ -13,12 +13,13 @@ from io import BytesIO
 from PIL import Image
 import pyperclip
 import websockets
+from pytube import YouTube
 
-# --- Backend API config ---
+# Backend API config
 BACKEND_URL = "http://localhost:8000/api"
 WS_URL = "ws://localhost:8000/ws"
 
-# 1. Set page config FIRST!
+# Page config
 st.set_page_config(
     page_title="PartyWatch - Shared YouTube Rooms",
     page_icon="🎬",
@@ -26,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. Gen Z/Modern UI CSS & JS
+# Modern UI CSS & JS
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Fira+Mono&display=swap');
@@ -209,7 +210,7 @@ window.confettiBurst = function() {
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
 """, unsafe_allow_html=True)
 
-# 3. Session state
+# Session state
 if 'user_id' not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
 if 'room_code' not in st.session_state:
@@ -227,15 +228,13 @@ if 'chat_messages' not in st.session_state:
 if 'room_users' not in st.session_state:
     st.session_state.room_users = []
 if 'room_type' not in st.session_state:
-    st.session_state.room_type = 'YouTube'  # or 'Spotify'
+    st.session_state.room_type = 'YouTube'
 if 'current_spotify_type' not in st.session_state:
     st.session_state.current_spotify_type = None
 if 'current_spotify_id' not in st.session_state:
     st.session_state.current_spotify_id = None
 if 'screenshare_role' not in st.session_state:
     st.session_state.screenshare_role = 'Viewer'
-
-# Add dark/light mode toggle and room description/password support
 if 'theme' not in st.session_state:
     st.session_state.theme = 'dark'
 if 'room_desc' not in st.session_state:
@@ -244,46 +243,71 @@ if 'room_password' not in st.session_state:
     st.session_state.room_password = ''
 if 'room_is_public' not in st.session_state:
     st.session_state.room_is_public = True
-
-# --- User online/offline indicators ---
 if 'user_status' not in st.session_state:
     st.session_state.user_status = {}
-
-def set_user_online(user_id):
-    st.session_state.user_status[user_id] = 'online'
-
-def set_user_offline(user_id):
-    st.session_state.user_status[user_id] = 'offline'
-
-# --- Chat message editing/deleting ---
 if 'edit_message_id' not in st.session_state:
     st.session_state.edit_message_id = None
 if 'edit_message_text' not in st.session_state:
     st.session_state.edit_message_text = ''
 if 'pinned_message' not in st.session_state:
     st.session_state.pinned_message = None
-
-# --- Notification badge ---
 if 'unread_count' not in st.session_state:
     st.session_state.unread_count = 0
-
-# --- User profile page ---
 if 'show_profile' not in st.session_state:
     st.session_state.show_profile = False
-
-# --- Media queue ---
 if 'media_queue' not in st.session_state:
     st.session_state.media_queue = []
-
-# --- Avatar URL ---
 if 'avatar_url' not in st.session_state:
     st.session_state.avatar_url = "https://api.dicebear.com/7.x/avataaars/svg?seed=default"
-
-# --- Database reference (for compatibility) ---
 if 'db' not in st.session_state:
-    st.session_state.db = None  # Will be replaced with API calls
+    st.session_state.db = None
+if 'private_chats' not in st.session_state:
+    st.session_state.private_chats = {}
+if 'sprint_board' not in st.session_state:
+    st.session_state.sprint_board = {'To Do': [], 'In Progress': [], 'Done': []}
+if 'meeting_notes' not in st.session_state:
+    st.session_state.meeting_notes = ""
 
-# --- Invite link sharing ---
+# Helper functions
+def api_post(path, data):
+    try:
+        r = requests.post(f"{BACKEND_URL}{path}", json=data)
+        r.raise_for_status()
+        return r.json()
+    except:
+        return None
+
+def api_get(path):
+    try:
+        r = requests.get(f"{BACKEND_URL}{path}")
+        r.raise_for_status()
+        return r.json()
+    except:
+        return None
+
+def api_patch(path, data):
+    r = requests.patch(f"{BACKEND_URL}{path}", json=data)
+    r.raise_for_status()
+    return r.json()
+
+def api_delete(path):
+    """Make DELETE request to backend API"""
+    try:
+        response = requests.delete(f"{BACKEND_URL}{path}")
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        st.error(f"API Error: {e}")
+        return None
+
+# User online/offline indicators
+def set_user_online(user_id):
+    st.session_state.user_status[user_id] = 'online'
+
+def set_user_offline(user_id):
+    st.session_state.user_status[user_id] = 'offline'
+
+# Invite link sharing
 def invite_link(room_code):
     link = f"http://localhost:8501/?room={room_code}"
     if st.button("Copy Invite Link"):
@@ -291,12 +315,11 @@ def invite_link(room_code):
         st.success("Invite link copied!")
     st.markdown(f"<small>{link}</small>", unsafe_allow_html=True)
 
-# --- Quick emoji reactions on messages ---
+# Quick emoji reactions on messages
 def message_reactions(msg_id):
     cols = st.columns(5)
     for i, emoji in enumerate(["👍", "😂", "😍", "🔥", "👏"]):
         if cols[i].button(emoji, key=f"react_{msg_id}_{i}"):
-            # For demo, just show a toast
             st.toast(f"Reacted {emoji} to message {msg_id}")
 
 def emoji_picker():
@@ -308,7 +331,7 @@ def emoji_picker():
             return emoji
     return None
 
-# --- Improved queue: drag-and-drop (desktop) ---
+# Improved queue: drag-and-drop (desktop)
 def queue_widget():
     st.markdown("**Queue / Playlist**")
     with st.form("queue_form"):
@@ -331,7 +354,7 @@ def queue_widget():
         top = max(st.session_state.media_queue, key=lambda x: x["votes"])
         st.write(top["url"])
 
-# --- User profile page ---
+# User profile page
 def user_profile():
     st.markdown(f"<h2>Profile: {st.session_state.username}</h2>", unsafe_allow_html=True)
     st.image(st.session_state.avatar_url, width=96)
@@ -341,8 +364,272 @@ def user_profile():
     if st.button("Back to Room"):
         st.session_state.show_profile = False
 
-# --- Update user presence to show online/offline ---
+# Theme toggle
+def theme_css():
+    if st.session_state.theme == 'dark':
+        return """
+        <style>
+        body, .main, .block-container {
+            background: linear-gradient(135deg, #0f2027 0%, #2c5364 100%) fixed !important;
+            color: #fff !important;
+        }
+        .room-card, .stForm > form {
+            background: rgba(30,30,40,0.92) !important;
+            color: #fff !important;
+        }
+        .chat-message { background: linear-gradient(90deg, #00ffe7 0%, #ff6bcb 100%); color: #222; }
+        </style>
+        """
+    else:
+        return """
+        <style>
+        body, .main, .block-container {
+            background: linear-gradient(135deg, #f0f2f6 0%, #e0e7ef 100%) fixed !important;
+            color: #222 !important;
+        }
+        .room-card, .stForm > form {
+            background: rgba(255,255,255,0.92) !important;
+            color: #222 !important;
+        }
+        .chat-message { background: linear-gradient(90deg, #00ffe7 0%, #ff6bcb 100%); color: #222; }
+        </style>
+        """
+
+def theme_toggle():
+    col1, col2 = st.columns([1, 8])
+    with col1:
+        if st.button('🌙' if st.session_state.theme == 'dark' else '☀️', key='theme_toggle'):
+            st.session_state.theme = 'light' if st.session_state.theme == 'dark' else 'dark'
+    with col2:
+        st.markdown(f'<span style="font-size:1.2rem;font-weight:700;">{st.session_state.theme.title()} Mode</span>', unsafe_allow_html=True)
+    st.markdown(theme_css(), unsafe_allow_html=True)
+
+# Avatar selector widget
+def avatar_selector():
+    st.subheader("👤 Choose Avatar")
+    AVATAR_CHOICES = [
+        "https://api.dicebear.com/7.x/avataaars/svg?seed=default",
+        "https://api.dicebear.com/7.x/avataaars/svg?seed=john",
+        "https://api.dicebear.com/7.x/avataaars/svg?seed=jane",
+        "https://api.dicebear.com/7.x/avataaars/svg?seed=mike",
+        "https://api.dicebear.com/7.x/avataaars/svg?seed=sarah"
+    ]
+    
+    if st.button("🎲 Random Avatar"):
+        st.session_state.avatar_url = AVATAR_CHOICES[0]
+    
+    cols = st.columns(len(AVATAR_CHOICES))
+    for i, url in enumerate(AVATAR_CHOICES):
+        with cols[i]:
+            if st.button(f"Avatar {i+1}", key=f"avatar_{i}"):
+                st.session_state.avatar_url = url
+
+# WebSocket for real-time chat/presence
+async def ws_listen(room_code, on_message):
+    async with websockets.connect(f"{WS_URL}/{room_code}") as ws:
+        while True:
+            msg = await ws.recv()
+            on_message(msg)
+
+def create_room(video_url, room_name):
+    """Create a new YouTube room"""
+    try:
+        # Extract video ID from YouTube URL
+        yt = YouTube(video_url)
+        video_id = yt.video_id
+        
+        # Generate room code
+        room_code = str(uuid.uuid4())[:8].upper()
+        
+        # Create room data
+        room_data = {
+            "room_code": room_code,
+            "host_id": st.session_state.user_id,
+            "video_id": video_id,
+            "room_name": room_name,
+            "room_type": "YouTube"
+        }
+        
+        # Call API to create room
+        result = api_post("/rooms", room_data)
+        if result:
+            st.session_state.room_code = room_code
+            st.session_state.is_host = True
+            st.session_state.username = room_name
+            st.session_state.room_type = 'YouTube'
+            st.session_state.current_video_id = video_id
+            st.session_state.room_desc = f"Watching: {yt.title}"
+            st.session_state.room_is_public = True
+            st.session_state.room_password = None
+            return room_code
+        return None
+    except Exception as e:
+        st.error(f"Error creating room: {e}")
+        return None
+
+def create_spotify_room(spotify_url, room_name):
+    """Create a new Spotify room"""
+    try:
+        # Extract Spotify ID and type from URL
+        if "track/" in spotify_url:
+            spotify_type = "track"
+            spotify_id = spotify_url.split("track/")[1].split("?")[0]
+        elif "playlist/" in spotify_url:
+            spotify_type = "playlist"
+            spotify_id = spotify_url.split("playlist/")[1].split("?")[0]
+        elif "album/" in spotify_url:
+            spotify_type = "album"
+            spotify_id = spotify_url.split("album/")[1].split("?")[0]
+        else:
+            st.error("Invalid Spotify URL")
+            return None
+        
+        # Generate room code
+        room_code = str(uuid.uuid4())[:8].upper()
+        
+        # Create room data
+        room_data = {
+            "room_code": room_code,
+            "host_id": st.session_state.user_id,
+            "spotify_type": spotify_type,
+            "spotify_id": spotify_id,
+            "room_name": room_name,
+            "room_type": "Spotify"
+        }
+        
+        # Call API to create room
+        result = api_post("/rooms", room_data)
+        if result:
+            st.session_state.room_code = room_code
+            st.session_state.is_host = True
+            st.session_state.username = room_name
+            st.session_state.room_type = 'Spotify'
+            st.session_state.current_spotify_type = spotify_type
+            st.session_state.current_spotify_id = spotify_id
+            st.session_state.room_desc = f"Listening to Spotify {spotify_type}"
+            st.session_state.room_is_public = True
+            st.session_state.room_password = None
+            return room_code
+        return None
+    except Exception as e:
+        st.error(f"Error creating Spotify room: {e}")
+        return None
+
+def join_room(room_code, username):
+    """Join an existing room"""
+    try:
+        result = api_post(f"/rooms/{room_code}/join", {
+            "user_id": st.session_state.user_id,
+            "username": username
+        })
+        
+        if result:
+            st.session_state.room_code = room_code
+            st.session_state.is_host = False
+            st.session_state.username = username
+            st.session_state.current_video_id = result.get("video_id")
+            st.session_state.room_type = result.get("room_type", "YouTube")
+            st.session_state.current_spotify_type = result.get("spotify_type")
+            st.session_state.current_spotify_id = result.get("spotify_id")
+            st.session_state.room_desc = result.get("room_desc", "")
+            st.session_state.room_is_public = result.get("is_public", True)
+            st.session_state.room_password = result.get("password")
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error joining room: {e}")
+        return False
+
+def join_spotify_room(room_code, username):
+    """Join an existing Spotify room"""
+    try:
+        # Call API to join room
+        result = api_post(f"/rooms/{room_code}/join", {
+            "user_id": st.session_state.user_id,
+            "username": username
+        })
+        
+        if result:
+            st.session_state.room_code = room_code
+            st.session_state.is_host = False
+            st.session_state.username = username
+            st.session_state.room_type = 'Spotify'
+            st.session_state.current_spotify_type = result.get("spotify_type")
+            st.session_state.current_spotify_id = result.get("spotify_id")
+            st.session_state.room_desc = result.get("room_desc", "Spotify Room")
+            st.session_state.room_is_public = result.get("is_public", True)
+            st.session_state.room_password = result.get("password")
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error joining Spotify room: {e}")
+        return False
+
+def render_youtube_player(video_id, is_host):
+    """Render YouTube player with controls"""
+    st.subheader("🎬 YouTube Player")
+    
+    # YouTube embed
+    youtube_embed = f"""
+    <iframe 
+        width="100%" 
+        height="400" 
+        src="https://www.youtube.com/embed/{video_id}?enablejsapi=1&origin={st.get_option('server.baseUrlPath')}" 
+        frameborder="0" 
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+        allowfullscreen>
+    </iframe>
+    """
+    st.markdown(youtube_embed, unsafe_allow_html=True)
+    
+    # Playback controls (host only)
+    if is_host:
+        st.subheader("🎮 Playback Controls")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button("⏮️ Previous"):
+                st.info("Previous track functionality")
+        
+        with col2:
+            if st.button("⏯️ Play/Pause"):
+                st.info("Play/Pause functionality")
+        
+        with col3:
+            if st.button("⏭️ Next"):
+                st.info("Next track functionality")
+        
+        with col4:
+            if st.button("🔊 Volume"):
+                st.info("Volume control")
+        
+        # Progress bar
+        progress = st.slider("Progress", 0, 100, 50, key="video_progress")
+        st.progress(progress / 100)
+
+def render_spotify_embed(spotify_type, spotify_id):
+    """Render Spotify embed player"""
+    st.subheader("🎵 Spotify Player")
+    
+    if spotify_type and spotify_id:
+        spotify_embed = f"""
+        <iframe 
+            style="border-radius:12px" 
+            src="https://open.spotify.com/embed/{spotify_type}/{spotify_id}?utm_source=generator" 
+            width="100%" 
+            height="352" 
+            frameborder="0" 
+            allowfullscreen="" 
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" 
+            loading="lazy">
+        </iframe>
+        """
+        st.markdown(spotify_embed, unsafe_allow_html=True)
+    else:
+        st.warning("No Spotify content loaded")
+
 def render_user_presence():
+    """Render users in room with presence indicators"""
     st.subheader("👤 Room Members")
     try:
         room_info = api_get(f"/rooms/{st.session_state.room_code}")
@@ -366,8 +653,8 @@ def render_user_presence():
     except Exception as e:
         st.error(f"Error loading room members: {e}")
 
-# --- Update chat section for edit/delete, pin, reactions, notification badge ---
-def render_chat_section():
+def render_chat():
+    """Render enhanced chat section with edit/delete, pin, reactions"""
     st.subheader(f"💬 Chat {'🔴' if st.session_state.unread_count else ''}")
     if st.session_state.pinned_message:
         st.markdown(f"<div style='background:#ffeaa7;padding:0.5rem 1rem;border-radius:8px;margin-bottom:0.5rem;'><b>Pinned:</b> {st.session_state.pinned_message}</div>", unsafe_allow_html=True)
@@ -464,324 +751,6 @@ def render_chat_section():
         
         st.session_state.unread_count += 1
 
-def theme_css():
-    if st.session_state.theme == 'dark':
-        return """
-        <style>
-        body, .main, .block-container {
-            background: linear-gradient(135deg, #0f2027 0%, #2c5364 100%) fixed !important;
-            color: #fff !important;
-        }
-        .room-card, .stForm > form {
-            background: rgba(30,30,40,0.92) !important;
-            color: #fff !important;
-        }
-        .chat-message { background: linear-gradient(90deg, #00ffe7 0%, #ff6bcb 100%); color: #222; }
-        </style>
-        """
-    else:
-        return """
-        <style>
-        body, .main, .block-container {
-            background: linear-gradient(135deg, #f0f2f6 0%, #e0e7ef 100%) fixed !important;
-            color: #222 !important;
-        }
-        .room-card, .stForm > form {
-            background: rgba(255,255,255,0.92) !important;
-            color: #222 !important;
-        }
-        .chat-message { background: linear-gradient(90deg, #00ffe7 0%, #ff6bcb 100%); color: #222; }
-        </style>
-        """
-
-# Place theme toggle at the top
-def theme_toggle():
-    col1, col2 = st.columns([1, 8])
-    with col1:
-        if st.button('🌙' if st.session_state.theme == 'dark' else '☀️', key='theme_toggle'):
-            st.session_state.theme = 'light' if st.session_state.theme == 'dark' else 'dark'
-    with col2:
-        st.markdown(f'<span style="font-size:1.2rem;font-weight:700;">{st.session_state.theme.title()} Mode</span>', unsafe_allow_html=True)
-    st.markdown(theme_css(), unsafe_allow_html=True)
-
-# Update sidebar for room desc/password/public toggle
-def sidebar_room_settings():
-    st.header("🏠 Room Management")
-    room_type = st.radio("Room Type", ["YouTube", "Spotify", "Screenshare"], index=["YouTube", "Spotify", "Screenshare"].index(st.session_state.room_type) if 'room_type' in st.session_state else 0)
-    st.session_state.room_type = room_type
-    st.session_state.room_desc = st.text_input("Room Description (optional)", value=st.session_state.room_desc)
-    st.session_state.room_is_public = st.checkbox("Public Room", value=st.session_state.room_is_public)
-    st.session_state.room_password = st.text_input("Room Password (optional)", value=st.session_state.room_password, type="password")
-
-# --- Helper functions for backend API ---
-def api_post(path, data):
-    r = requests.post(f"{BACKEND_URL}{path}", json=data)
-    r.raise_for_status()
-    return r.json()
-
-def api_get(path):
-    r = requests.get(f"{BACKEND_URL}{path}")
-    r.raise_for_status()
-    return r.json()
-
-def api_patch(path, data):
-    r = requests.patch(f"{BACKEND_URL}{path}", json=data)
-    r.raise_for_status()
-    return r.json()
-
-def api_delete(path):
-    """Make DELETE request to backend API"""
-    try:
-        response = requests.delete(f"{BACKEND_URL}{path}")
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        st.error(f"API Error: {e}")
-        return None
-
-# --- Replace all local/mock db calls with API calls ---
-# Example: create room
-# room = api_post("/rooms/", room_data)
-# Example: get room
-# room = api_get(f"/rooms/{room_code}")
-# Example: send chat message
-# msg = api_post("/chat/", msg_data)
-# ...and so on for users, queue, polls
-
-# --- WebSocket for real-time chat/presence ---
-async def ws_listen(room_code, on_message):
-    async with websockets.connect(f"{WS_URL}/{room_code}") as ws:
-        while True:
-            msg = await ws.recv()
-            on_message(msg)
-
-# --- UI/UX code remains mostly the same, but all data is now fetched/sent via the backend ---
-# ... (rest of your Streamlit UI code, using the above API helpers) ...
-
-# Add comments and modularize as needed for clarity and maintainability.
-
-# --- Avatar selector widget ---
-def avatar_selector():
-    st.subheader("👤 Choose Avatar")
-    AVATAR_CHOICES = [
-        "https://api.dicebear.com/7.x/avataaars/svg?seed=default",
-        "https://api.dicebear.com/7.x/avataaars/svg?seed=john",
-        "https://api.dicebear.com/7.x/avataaars/svg?seed=jane",
-        "https://api.dicebear.com/7.x/avataaars/svg?seed=mike",
-        "https://api.dicebear.com/7.x/avataaars/svg?seed=sarah"
-    ]
-    
-    if st.button("🎲 Random Avatar"):
-        st.session_state.avatar_url = AVATAR_CHOICES[0]
-    
-    cols = st.columns(len(AVATAR_CHOICES))
-    for i, url in enumerate(AVATAR_CHOICES):
-        with cols[i]:
-            if st.button(f"Avatar {i+1}", key=f"avatar_{i}"):
-                st.session_state.avatar_url = url
-
-def join_room_flow():
-    join_code = st.text_input("Room Code", placeholder="Enter 8-character code")
-    join_name = st.text_input("Your Name", key="join_name")
-    room_info = None
-    password = None
-    if join_code:
-        try:
-            room_info = api_get(f"/rooms/{join_code.upper()}")
-        except Exception:
-            room_info = None
-    if room_info and not room_info.get("is_public", True):
-        password = st.text_input("Room Password", type="password", key="join_room_password")
-    join_button = st.button("Join Room")
-    if join_button and join_code and join_name:
-        try:
-            data = {"user_id": st.session_state.user_id}
-            if password:
-                data["password"] = password
-            api_post(f"/rooms/{join_code.upper()}/join", data)
-            st.success("Successfully joined room!")
-            st.session_state.room_code = join_code.upper()
-            st.session_state.username = join_name
-            st.rerun()
-        except requests.HTTPError as e:
-            if e.response.status_code == 403:
-                st.error("Incorrect password for private room.")
-            else:
-                st.error("Invalid room code or room doesn't exist.")
-
-def create_room(video_url, room_name):
-    """Create a new YouTube room"""
-    try:
-        # Extract video ID from YouTube URL
-        from pytube import YouTube
-        yt = YouTube(video_url)
-        video_id = yt.video_id
-        
-        # Generate room code
-        room_code = str(uuid.uuid4())[:8].upper()
-        
-        # Create room data
-        room_data = {
-            "room_code": room_code,
-            "host_id": st.session_state.user_id,
-            "video_id": video_id,
-            "room_name": room_name,
-            "room_type": "YouTube"
-        }
-        
-        # Call API to create room
-        result = api_post("/rooms", room_data)
-        if result:
-            st.session_state.room_code = room_code
-            st.session_state.is_host = True
-            st.session_state.username = room_name
-            st.session_state.room_type = 'YouTube'
-            st.session_state.current_video_id = video_id
-            st.session_state.room_desc = f"Watching: {yt.title}"
-            st.session_state.room_is_public = True
-            st.session_state.room_password = None
-            return room_code
-        return None
-    except Exception as e:
-        st.error(f"Error creating room: {e}")
-        return None
-
-def create_spotify_room(spotify_url, room_name):
-    """Create a new Spotify room"""
-    try:
-        # Extract Spotify ID and type from URL
-        if "track/" in spotify_url:
-            spotify_type = "track"
-            spotify_id = spotify_url.split("track/")[1].split("?")[0]
-        elif "playlist/" in spotify_url:
-            spotify_type = "playlist"
-            spotify_id = spotify_url.split("playlist/")[1].split("?")[0]
-        elif "album/" in spotify_url:
-            spotify_type = "album"
-            spotify_id = spotify_url.split("album/")[1].split("?")[0]
-        else:
-            st.error("Invalid Spotify URL")
-            return None
-        
-        # Generate room code
-        room_code = str(uuid.uuid4())[:8].upper()
-        
-        # Create room data
-        room_data = {
-            "room_code": room_code,
-            "host_id": st.session_state.user_id,
-            "spotify_type": spotify_type,
-            "spotify_id": spotify_id,
-            "room_name": room_name,
-            "room_type": "Spotify"
-        }
-        
-        # Call API to create room
-        result = api_post("/rooms", room_data)
-        if result:
-            st.session_state.room_code = room_code
-            st.session_state.is_host = True
-            st.session_state.username = room_name
-            st.session_state.room_type = 'Spotify'
-            st.session_state.current_spotify_type = spotify_type
-            st.session_state.current_spotify_id = spotify_id
-            st.session_state.room_desc = f"Listening to Spotify {spotify_type}"
-            st.session_state.room_is_public = True
-            st.session_state.room_password = None
-            return room_code
-        return None
-    except Exception as e:
-        st.error(f"Error creating Spotify room: {e}")
-        return None
-
-def join_spotify_room(room_code, username):
-    """Join an existing Spotify room"""
-    try:
-        # Call API to join room
-        result = api_post(f"/rooms/{room_code}/join", {
-            "user_id": st.session_state.user_id,
-            "username": username
-        })
-        
-        if result:
-            st.session_state.room_code = room_code
-            st.session_state.is_host = False
-            st.session_state.username = username
-            st.session_state.room_type = 'Spotify'
-            st.session_state.current_spotify_type = result.get("spotify_type")
-            st.session_state.current_spotify_id = result.get("spotify_id")
-            st.session_state.room_desc = result.get("room_desc", "Spotify Room")
-            st.session_state.room_is_public = result.get("is_public", True)
-            st.session_state.room_password = result.get("password")
-            return True
-        return False
-    except Exception as e:
-        st.error(f"Error joining Spotify room: {e}")
-        return False
-
-def render_youtube_player(video_id, is_host):
-    """Render YouTube player with controls"""
-    st.subheader("🎬 YouTube Player")
-    
-    # YouTube embed
-    youtube_embed = f"""
-    <iframe 
-        width="100%" 
-        height="400" 
-        src="https://www.youtube.com/embed/{video_id}?enablejsapi=1&origin={st.get_option('server.baseUrlPath')}" 
-        frameborder="0" 
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-        allowfullscreen>
-    </iframe>
-    """
-    st.markdown(youtube_embed, unsafe_allow_html=True)
-    
-    # Playback controls (host only)
-    if is_host:
-        st.subheader("🎮 Playback Controls")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if st.button("⏮️ Previous"):
-                st.info("Previous track functionality")
-        
-        with col2:
-            if st.button("⏯️ Play/Pause"):
-                st.info("Play/Pause functionality")
-        
-        with col3:
-            if st.button("⏭️ Next"):
-                st.info("Next track functionality")
-        
-        with col4:
-            if st.button("🔊 Volume"):
-                st.info("Volume control")
-        
-        # Progress bar
-        progress = st.slider("Progress", 0, 100, 50, key="video_progress")
-        st.progress(progress / 100)
-
-def render_spotify_embed(spotify_type, spotify_id):
-    """Render Spotify embed player"""
-    st.subheader("🎵 Spotify Player")
-    
-    if spotify_type and spotify_id:
-        spotify_embed = f"""
-        <iframe 
-            style="border-radius:12px" 
-            src="https://open.spotify.com/embed/{spotify_type}/{spotify_id}?utm_source=generator" 
-            width="100%" 
-            height="352" 
-            frameborder="0" 
-            allowfullscreen="" 
-            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" 
-            loading="lazy">
-        </iframe>
-        """
-        st.markdown(spotify_embed, unsafe_allow_html=True)
-    else:
-        st.warning("No Spotify content loaded")
-
 def poll_widget():
     """Render poll widget"""
     st.subheader("📊 Quick Poll")
@@ -819,11 +788,6 @@ def poll_widget():
                 if st.button(f"Vote ({votes})", key=f"vote_{option}"):
                     poll['votes'][option] += 1
                     st.rerun()
-
-# Placeholder for private chat state
-if 'private_chats' not in st.session_state:
-    st.session_state.private_chats = {}
-# TODO: Implement private chat logic (UI, backend, WebSocket)
 
 def work_mode_ui():
     """Work mode UI with professional features"""
@@ -981,7 +945,7 @@ def work_mode_ui():
         chat_type = st.radio("Chat Type", ["Public", "Private"], horizontal=True, key="work_chat_type")
         
         if chat_type == "Public":
-            render_chat_section()
+            render_chat()
         else:
             st.subheader("🔒 Private Chat")
             
@@ -1114,10 +1078,19 @@ def work_mode_ui():
         
         st.markdown('</div>', unsafe_allow_html=True)
 
+def sidebar_room_settings():
+    st.header("🏠 Room Management")
+    room_type = st.radio("Room Type", ["YouTube", "Spotify", "Screenshare"], index=["YouTube", "Spotify", "Screenshare"].index(st.session_state.room_type) if 'room_type' in st.session_state else 0)
+    st.session_state.room_type = room_type
+    st.session_state.room_desc = st.text_input("Room Description (optional)", value=st.session_state.room_desc)
+    st.session_state.room_is_public = st.checkbox("Public Room", value=st.session_state.room_is_public)
+    st.session_state.room_password = st.text_input("Room Password (optional)", value=st.session_state.room_password, type="password")
+
 def main():
     theme_toggle()
     st.markdown('<h1 class="main-header">🎬 PartyWatch</h1>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: center; font-size: 1.2rem;">Create and join shared YouTube, Spotify, or Screenshare rooms with real-time chat and presence</p>', unsafe_allow_html=True)
+    
     with st.sidebar:
         avatar_selector()
         sidebar_room_settings()
@@ -1161,7 +1134,16 @@ def main():
                             st.rerun()
                 st.divider()
                 st.subheader("Join Room")
-                join_room_flow()
+                with st.form("join_room_form"):
+                    join_code = st.text_input("Room Code", placeholder="Enter 8-character code")
+                    join_name = st.text_input("Your Name", key="join_name")
+                    join_button = st.form_submit_button("Join Room")
+                    if join_button and join_code and join_name:
+                        if join_room(join_code.upper(), join_name):
+                            st.success("Successfully joined room!")
+                            st.rerun()
+                        else:
+                            st.error("Invalid room code or room doesn't exist")
             elif st.session_state.room_type == "Spotify":
                 st.subheader("Create Spotify Room")
                 with st.form("create_spotify_room_form"):
@@ -1236,9 +1218,11 @@ def main():
                                 st.error("Invalid room code or room doesn't exist")
                         except Exception as e:
                             st.error(f"Error joining room: {e}")
+    
     if st.session_state.show_profile:
         user_profile()
         return
+    
     if st.session_state.room_code:
         st.markdown(f"""
         <div class="room-card">
@@ -1248,7 +1232,9 @@ def main():
             <p>{'🔓 Public' if st.session_state.room_is_public else '🔒 Private'}{' | Password set' if st.session_state.room_password else ''}</p>
         </div>
         """, unsafe_allow_html=True)
+        
         col1, col2 = st.columns([2, 1])
+        
         with col1:
             if st.session_state.room_type == "YouTube":
                 if st.session_state.current_video_id:
@@ -1280,10 +1266,13 @@ def main():
                     )
             poll_widget()
             queue_widget()
+        
         with col2:
             render_user_presence()
-            render_chat_section()
-        time.sleep(2)
+            render_chat()
+        
+        # Auto-refresh every 5 seconds
+        time.sleep(5)
         st.rerun()
     else:
         st.markdown("""
