@@ -13,6 +13,7 @@ from io import BytesIO
 from PIL import Image
 import pyperclip
 import websockets
+import html
 from pytube import YouTube
 
 # Backend API config
@@ -267,6 +268,15 @@ if 'sprint_board' not in st.session_state:
     st.session_state.sprint_board = {'To Do': [], 'In Progress': [], 'Done': []}
 if 'meeting_notes' not in st.session_state:
     st.session_state.meeting_notes = ""
+if 'room_info' not in st.session_state:
+    st.session_state.room_info = {}
+
+# Security Utility
+def sanitize_input(text):
+    """Escapes HTML special characters in a string to prevent XSS."""
+    if not isinstance(text, str):
+        return ""
+    return html.escape(text)
 
 # Helper functions
 def api_post(path, data):
@@ -515,55 +525,59 @@ def create_spotify_room(spotify_url, room_name):
         st.error(f"Error creating Spotify room: {e}")
         return None
 
-def join_room(room_code, username):
-    """Join an existing room"""
-    try:
-        result = api_post(f"/rooms/{room_code}/join", {
-            "user_id": st.session_state.user_id,
-            "username": username
-        })
-        
-        if result:
-            st.session_state.room_code = room_code
-            st.session_state.is_host = False
-            st.session_state.username = username
-            st.session_state.current_video_id = result.get("video_id")
-            st.session_state.room_type = result.get("room_type", "YouTube")
-            st.session_state.current_spotify_type = result.get("spotify_type")
-            st.session_state.current_spotify_id = result.get("spotify_id")
-            st.session_state.room_desc = result.get("room_desc", "")
-            st.session_state.room_is_public = result.get("is_public", True)
-            st.session_state.room_password = result.get("password")
-            return True
-        return False
-    except Exception as e:
-        st.error(f"Error joining room: {e}")
-        return False
+def join_room_ui():
+    """Renders a unified UI for joining any room and handles the join logic."""
+    st.subheader("Join a Room")
+    with st.form("join_room_form"):
+        join_code = st.text_input("Room Code", placeholder="Enter 8-character code")
+        join_name = st.text_input("Your Name", key="join_name")
+        password = st.text_input("Room Password (if required)", type="password", key="join_room_password")
+        join_button = st.form_submit_button("Join Room")
 
-def join_spotify_room(room_code, username):
-    """Join an existing Spotify room"""
-    try:
-        # Call API to join room
-        result = api_post(f"/rooms/{room_code}/join", {
-            "user_id": st.session_state.user_id,
-            "username": username
-        })
-        
-        if result:
-            st.session_state.room_code = room_code
-            st.session_state.is_host = False
-            st.session_state.username = username
-            st.session_state.room_type = 'Spotify'
-            st.session_state.current_spotify_type = result.get("spotify_type")
-            st.session_state.current_spotify_id = result.get("spotify_id")
-            st.session_state.room_desc = result.get("room_desc", "Spotify Room")
-            st.session_state.room_is_public = result.get("is_public", True)
-            st.session_state.room_password = result.get("password")
-            return True
-        return False
-    except Exception as e:
-        st.error(f"Error joining Spotify room: {e}")
-        return False
+        if join_button and join_code and join_name:
+            with st.spinner(f"Joining room {join_code.upper()}..."):
+                try:
+                    # Sanitize username before sending to backend
+                    safe_username = sanitize_input(join_name)
+                    if not safe_username:
+                        st.warning("Please enter a valid name.")
+                        return
+
+                    join_data = {
+                        "user_id": st.session_state.user_id,
+                        "username": safe_username
+                    }
+                    if password:
+                        join_data["password"] = password
+
+                    result = api_post(f"/rooms/{join_code.upper()}/join", join_data)
+
+                    if result:
+                        st.session_state.room_code = join_code.upper()
+                        st.session_state.is_host = False
+                        st.session_state.username = safe_username
+
+                        # Update state from backend response
+                        st.session_state.room_info = result
+                        st.session_state.room_type = result.get("room_type", "YouTube")
+                        st.session_state.current_video_id = result.get("video_id")
+                        st.session_state.current_spotify_type = result.get("spotify_type")
+                        st.session_state.current_spotify_id = result.get("spotify_id")
+                        st.session_state.room_desc = result.get("room_desc", "")
+                        st.session_state.room_is_public = result.get("is_public", True)
+
+                        st.success("Successfully joined room!")
+                        st.markdown('<script>window.confettiBurst && window.confettiBurst();</script>', unsafe_allow_html=True)
+                        st.rerun()
+                    else:
+                        st.error("Invalid room code or password.")
+                except requests.HTTPError as e:
+                    if e.response.status_code == 403:
+                        st.error("Incorrect password or you are not authorized to join.")
+                    else:
+                        st.error("Invalid room code or the room may not exist.")
+                except Exception as e:
+                    st.error(f"An error occurred while joining the room: {e}")
 
 def render_youtube_player(video_id, is_host):
     """Render YouTube player with controls"""
@@ -631,31 +645,36 @@ def render_spotify_embed(spotify_type, spotify_id):
 def render_user_presence():
     """Render users in room with presence indicators"""
     st.subheader("👤 Room Members")
-    try:
-        room_info = api_get(f"/rooms/{st.session_state.room_code}")
-        if room_info:
-            for user in room_info.get('users', []):
-                is_host = user.get('id') == room_info.get('host_id')
-                username = user.get('username', f"User {user.get('id', '')[:8]}")
-                status = st.session_state.user_status.get(user.get('id'), 'online')
-                status_dot = '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:{};margin-right:0.5rem;"></span>'.format('#4CAF50' if status=='online' else '#aaa')
-                profile_btn = ''
-                if user.get('id') == st.session_state.user_id:
-                    profile_btn = '<button onclick="window.location.href=\'#profile\'">Profile</button>'
-                st.markdown(f"""
-                <div style="margin: 0.5rem 0;">
-                    {status_dot}
-                    {username}
-                    {'<span class="host-badge">HOST</span>' if is_host else ''}
-                    {profile_btn}
-                </div>
-                """, unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Error loading room members: {e}")
+    room_info = st.session_state.get('room_info', {})
+    if not room_info:
+        st.info("Loading room members...")
+        return
+    
+    for user in room_info.get('users', []):
+        is_host = user.get('id') == room_info.get('host_id')
+        username = sanitize_input(user.get('username', f"User {user.get('id', '')[:8]}"))
+        status = st.session_state.user_status.get(user.get('id'), 'online')
+        status_dot = '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:{};margin-right:0.5rem;"></span>'.format('#4CAF50' if status=='online' else '#aaa')
+        profile_btn = ''
+        if user.get('id') == st.session_state.user_id:
+            profile_btn = '<button onclick="window.location.href=\'#profile\'">Profile</button>'
+        st.markdown(f"""
+        <div style="margin: 0.5rem 0;">
+            {status_dot}
+            {username}
+            {'<span class="host-badge">HOST</span>' if is_host else ''}
+            {profile_btn}
+        </div>
+        """, unsafe_allow_html=True)
 
-def render_chat():
-    """Render enhanced chat section with edit/delete, pin, reactions"""
-    st.subheader(f"💬 Chat {'🔴' if st.session_state.unread_count else ''}")
+def render_chat_section():
+    # Reset unread count as soon as the user sees the chat section
+    subheader_text = "💬 Chat"
+    if st.session_state.unread_count > 0:
+        subheader_text += f" ({st.session_state.unread_count} new)"
+    st.subheader(subheader_text)
+    st.session_state.unread_count = 0
+    
     if st.session_state.pinned_message:
         st.markdown(f"<div style='background:#ffeaa7;padding:0.5rem 1rem;border-radius:8px;margin-bottom:0.5rem;'><b>Pinned:</b> {st.session_state.pinned_message}</div>", unsafe_allow_html=True)
     chat_container = st.container()
@@ -663,13 +682,21 @@ def render_chat():
         for idx, msg in enumerate(st.session_state.chat_messages[-20:]):
             timestamp = datetime.fromisoformat(msg['timestamp']).strftime("%H:%M")
             avatar_html = f'<img src="{st.session_state.avatar_url}" style="width:32px;height:32px;border-radius:50%;vertical-align:middle;margin-right:8px;">' if st.session_state.avatar_url else ''
-            msg_text = msg['message']
-            if msg_text.startswith('GIF:'):
-                msg_text = f'<img src="{msg_text[4:]}" style="max-width:120px;max-height:120px;border-radius:12px;">'
+            
+            # Sanitize content before rendering
+            username_html = sanitize_input(msg.get('username'))
+            raw_message = msg.get('message', '')
+
+            if raw_message.startswith('GIF:'):
+                gif_url = sanitize_input(raw_message[4:]) # Sanitize the URL part
+                msg_html = f'<img src="{gif_url}" style="max-width:120px;max-height:120px;border-radius:12px;">'
+            else:
+                msg_html = sanitize_input(raw_message)
+
             st.markdown(f"""
             <div class="chat-message">
-                {avatar_html}<strong>{msg['username']}</strong> <small>({timestamp})</small><br>
-                {msg_text}
+                {avatar_html}<strong>{username_html}</strong> <small>({timestamp})</small><br>
+                {msg_html}
             </div>
             """, unsafe_allow_html=True)
             # Quick reactions
@@ -717,14 +744,13 @@ def render_chat():
                     "room_code": st.session_state.room_code,
                     "user_id": st.session_state.user_id,
                     "username": st.session_state.username,
-                    "message": message
+                    "message": sanitize_input(message) # Sanitize on the way out
                 }
                 result = api_post("/chat/messages", chat_data)
                 if result:
-                    # Refresh chat messages
-                    chat_messages = api_get(f"/chat/{st.session_state.room_code}/messages")
-                    if chat_messages:
-                        st.session_state.chat_messages = chat_messages
+                    # Instantly add message to local state for responsiveness
+                    st.session_state.chat_messages.append(result)
+                    st.session_state.unread_count = 0 # Reset own unread count
                     st.rerun()
             except Exception as e:
                 st.error(f"Error sending message: {e}")
@@ -733,27 +759,25 @@ def render_chat():
         gif_url = st.text_input("Or send a GIF URL", placeholder="https://media.giphy.com/...")
         if st.button("Send GIF") and gif_url:
             try:
+                # Sanitize the GIF url before creating the special message format
+                safe_gif_url = sanitize_input(gif_url)
                 chat_data = {
                     "room_code": st.session_state.room_code,
                     "user_id": st.session_state.user_id,
                     "username": st.session_state.username,
-                    "message": f"GIF:{gif_url}"
+                    "message": f"GIF:{safe_gif_url}" # Sanitize on the way out
                 }
                 result = api_post("/chat/messages", chat_data)
                 if result:
-                    # Refresh chat messages
-                    chat_messages = api_get(f"/chat/{st.session_state.room_code}/messages")
-                    if chat_messages:
-                        st.session_state.chat_messages = chat_messages
+                    # Instantly add message to local state for responsiveness
+                    st.session_state.chat_messages.append(result)
                     st.rerun()
             except Exception as e:
                 st.error(f"Error sending GIF: {e}")
-        
-        st.session_state.unread_count += 1
 
 def poll_widget():
     """Render poll widget"""
-    st.subheader("📊 Quick Poll")
+    st.subheader("🎲 Quick Poll")
     
     with st.expander("Create a poll"):
         poll_question = st.text_input("Poll Question", key="poll_question")
@@ -945,7 +969,7 @@ def work_mode_ui():
         chat_type = st.radio("Chat Type", ["Public", "Private"], horizontal=True, key="work_chat_type")
         
         if chat_type == "Public":
-            render_chat()
+            render_chat_section()
         else:
             st.subheader("🔒 Private Chat")
             
@@ -1086,6 +1110,52 @@ def sidebar_room_settings():
     st.session_state.room_is_public = st.checkbox("Public Room", value=st.session_state.room_is_public)
     st.session_state.room_password = st.text_input("Room Password (optional)", value=st.session_state.room_password, type="password")
 
+def update_room_state():
+    """
+    Periodically fetches state from the backend.
+    - Chat messages are fetched frequently (differential update).
+    - General room info is fetched less frequently.
+    """
+    if not st.session_state.get("room_code"):
+        return
+
+    st.session_state.poll_counter = st.session_state.get('poll_counter', 0) + 1
+
+    try:
+        # --- Fast Polling: Chat Messages (every ~3 seconds) ---
+        last_timestamp = "1970-01-01T00:00:00.000000"
+        if st.session_state.chat_messages:
+            last_timestamp = st.session_state.chat_messages[-1]['timestamp']
+        
+        # For this to be efficient, the backend API must support the `since` parameter
+        # to return only new messages. Otherwise, it will re-send the full history.
+        new_messages = api_get(f"/chat/{st.session_state.room_code}/messages?since={last_timestamp}")
+        
+        if new_messages:
+            st.session_state.chat_messages.extend(new_messages)
+            st.session_state.unread_count += len(new_messages)
+
+        # --- Slow Polling: General Room Info (every 4th poll, i.e., ~12 seconds) ---
+        if st.session_state.poll_counter % 4 == 0:
+            room_info = api_get(f"/rooms/{st.session_state.room_code}")
+            if room_info:
+                # Check for host promotion
+                was_host = st.session_state.is_host
+                is_now_host = st.session_state.user_id == room_info.get('host_id')
+                if is_now_host and not was_host:
+                    st.toast("👑 You have been promoted to room host!", icon="🎉")
+
+                st.session_state.is_host = is_now_host
+                st.session_state.room_info = room_info
+                st.session_state.room_desc = room_info.get("room_desc", st.session_state.get("room_desc", ""))
+            
+    except requests.RequestException:
+        # Fail silently if the backend is temporarily unavailable during a poll
+        pass
+    except Exception:
+        # Could log this for debugging, but don't show UI error on a poll
+        pass
+
 def main():
     theme_toggle()
     st.markdown('<h1 class="main-header">🎬 PartyWatch</h1>', unsafe_allow_html=True)
@@ -1112,14 +1182,24 @@ def main():
             if st.button("Show Profile"):
                 st.session_state.show_profile = True
             if st.button("Leave Room"):
-                st.session_state.room_code = None
-                st.session_state.is_host = False
-                st.session_state.current_video_id = None
-                st.session_state.current_spotify_type = None
-                st.session_state.current_spotify_id = None
-                st.session_state.playback_state = {'playing': False, 'current_time': 0}
-                st.session_state.chat_messages = []
-                st.rerun()
+                try:
+                    # Notify the backend that this user is leaving.
+                    # This allows the backend to handle host migration if needed.
+                    api_post(f"/rooms/{st.session_state.room_code}/leave", {"user_id": st.session_state.user_id})
+                except Exception as e:
+                    # Even if the API call fails, the user should be able to leave the UI.
+                    # This could be logged to a more persistent store for debugging.
+                    print(f"Could not notify backend of leave action: {e}")
+                finally:
+                    # Reset local session state to leave the room UI
+                    st.session_state.room_code = None
+                    st.session_state.is_host = False
+                    st.session_state.current_video_id = None
+                    st.session_state.current_spotify_type = None
+                    st.session_state.current_spotify_id = None
+                    st.session_state.playback_state = {'playing': False, 'current_time': 0}
+                    st.session_state.chat_messages = []
+                    st.rerun()
         else:
             if st.session_state.room_type == "YouTube":
                 st.subheader("Create YouTube Room")
@@ -1128,22 +1208,18 @@ def main():
                     room_name = st.text_input("Your Name", value=st.session_state.username)
                     create_button = st.form_submit_button("Create Room")
                     if create_button and video_url and room_name:
-                        room_code = create_room(video_url, room_name)
-                        if room_code:
-                            st.success(f"Room created! Code: **{room_code}**")
-                            st.rerun()
+                        with st.spinner("Creating your room..."):
+                            # Sanitize username before sending to backend
+                            safe_username = sanitize_input(room_name)
+                            if not safe_username:
+                                st.warning("Please enter a valid name.")
+                            else:
+                                room_code = create_room(video_url, safe_username)
+                                if room_code:
+                                    st.success(f"Room created! Code: **{room_code}**")
+                                    st.rerun()
                 st.divider()
-                st.subheader("Join Room")
-                with st.form("join_room_form"):
-                    join_code = st.text_input("Room Code", placeholder="Enter 8-character code")
-                    join_name = st.text_input("Your Name", key="join_name")
-                    join_button = st.form_submit_button("Join Room")
-                    if join_button and join_code and join_name:
-                        if join_room(join_code.upper(), join_name):
-                            st.success("Successfully joined room!")
-                            st.rerun()
-                        else:
-                            st.error("Invalid room code or room doesn't exist")
+                join_room_ui()
             elif st.session_state.room_type == "Spotify":
                 st.subheader("Create Spotify Room")
                 with st.form("create_spotify_room_form"):
@@ -1151,73 +1227,53 @@ def main():
                     room_name = st.text_input("Your Name", value=st.session_state.username, key="spotify_room_name")
                     create_button = st.form_submit_button("Create Spotify Room")
                     if create_button and spotify_url and room_name:
-                        room_code = create_spotify_room(spotify_url, room_name)
-                        if room_code:
-                            st.success(f"Spotify Room created! Code: **{room_code}**")
-                            st.rerun()
+                        with st.spinner("Creating Spotify room..."):
+                            # Sanitize username before sending to backend
+                            safe_username = sanitize_input(room_name)
+                            if not safe_username:
+                                st.warning("Please enter a valid name.")
+                            else:
+                                room_code = create_spotify_room(spotify_url, safe_username)
+                                if room_code:
+                                    st.success(f"Spotify Room created! Code: **{room_code}**")
+                                    st.rerun()
                 st.divider()
                 st.subheader("Join Spotify Room")
-                with st.form("join_spotify_room_form"):
-                    join_code = st.text_input("Room Code", placeholder="Enter 8-character code", key="spotify_join_code")
-                    join_name = st.text_input("Your Name", key="spotify_join_name")
-                    join_button = st.form_submit_button("Join Spotify Room")
-                    if join_button and join_code and join_name:
-                        if join_spotify_room(join_code.upper(), join_name):
-                            st.success("Successfully joined Spotify room!")
-                            st.rerun()
-                        else:
-                            st.error("Invalid room code or room doesn't exist")
+                join_room_ui()
             else:  # Screenshare
                 st.subheader("Create Screenshare Room")
                 with st.form("create_screenshare_room_form"):
                     room_name = st.text_input("Your Name", value=st.session_state.username, key="screenshare_room_name")
                     create_button = st.form_submit_button("Create Screenshare Room")
                     if create_button and room_name:
-                        room_code = str(uuid.uuid4())[:8].upper()
-                        room_data = {
-                            "room_code": room_code,
-                            "host_id": st.session_state.user_id,
-                            "room_name": room_name,
-                            "room_type": "Screenshare"
-                        }
-                        result = api_post("/rooms", room_data)
-                        if result:
-                            st.session_state.room_code = room_code
-                            st.session_state.is_host = True
-                            st.session_state.username = room_name
-                            st.session_state.room_type = 'Screenshare'
-                            st.session_state.room_desc = "Screensharing Room"
-                            st.session_state.room_is_public = True
-                            st.session_state.room_password = None
-                            st.markdown('<script>window.confettiBurst && window.confettiBurst();</script>', unsafe_allow_html=True)
-                            st.rerun()
-                st.divider()
-                st.subheader("Join Screenshare Room")
-                with st.form("join_screenshare_room_form"):
-                    join_code = st.text_input("Room Code", placeholder="Enter 8-character code", key="screenshare_join_code")
-                    join_name = st.text_input("Your Name", key="screenshare_join_name")
-                    join_button = st.form_submit_button("Join Screenshare Room")
-                    if join_button and join_code and join_name:
-                        try:
-                            join_data = {
-                                "user_id": st.session_state.user_id,
-                                "username": join_name
+                        with st.spinner("Creating screenshare room..."):
+                            # Sanitize username before sending to backend
+                            safe_username = sanitize_input(room_name)
+                            if not safe_username:
+                                st.warning("Please enter a valid name.")
+                                return
+
+                            room_code = str(uuid.uuid4())[:8].upper()
+                            room_data = {
+                                "room_code": room_code,
+                                "host_id": st.session_state.user_id,
+                                "room_name": safe_username,
+                                "room_type": "Screenshare"
                             }
-                            result = api_post(f"/rooms/{join_code.upper()}/join", join_data)
+                            result = api_post("/rooms", room_data)
                             if result:
-                                st.session_state.room_code = join_code.upper()
-                                st.session_state.is_host = False
-                                st.session_state.username = join_name
+                                st.session_state.room_code = room_code
+                                st.session_state.is_host = True
+                                st.session_state.username = safe_username
                                 st.session_state.room_type = 'Screenshare'
-                                st.session_state.room_desc = result.get("room_desc", "Screensharing Room")
-                                st.session_state.room_is_public = result.get("is_public", True)
-                                st.session_state.room_password = result.get("password")
+                                st.session_state.room_desc = "Screensharing Room"
+                                st.session_state.room_is_public = True
+                                st.session_state.room_password = None
                                 st.markdown('<script>window.confettiBurst && window.confettiBurst();</script>', unsafe_allow_html=True)
                                 st.rerun()
-                            else:
-                                st.error("Invalid room code or room doesn't exist")
-                        except Exception as e:
-                            st.error(f"Error joining room: {e}")
+                st.divider()
+                st.subheader("Join Screenshare Room")
+                join_room_ui()
     
     if st.session_state.show_profile:
         user_profile()
@@ -1269,10 +1325,12 @@ def main():
         
         with col2:
             render_user_presence()
-            render_chat()
+            render_chat_section()
         
-        # Auto-refresh every 5 seconds
-        time.sleep(5)
+        # This polling loop is a simple way to keep the app updated
+        # with new messages and user statuses from the backend.
+        update_room_state()
+        time.sleep(3)
         st.rerun()
     else:
         st.markdown("""
